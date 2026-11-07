@@ -4,6 +4,8 @@ A small, fast web app for prioritizing tasks with the Eisenhower Matrix. Type a 
 
 No frameworks and no build step: the whole app is the `www/` folder.
 
+**Live version:** https://mumblescrzy.github.io/Eisenhower-Matrix-App/
+
 ## Try it now
 
 Double-click `www/index.html`. Everything works from a local file except the offline cache and the "Install app" option, which browsers only allow over http(s).
@@ -80,7 +82,7 @@ Any static host works. The app uses relative paths, so it is fine in a sub-folde
 
 - **Netlify Drop** (easiest): go to https://app.netlify.com/drop and drag the `www` folder onto the page. You get an https URL immediately.
 - **Cloudflare Pages / Vercel**: create a project, point it at this repository, set the output directory to `www`, no build command.
-- **GitHub Pages**: Pages serves from the repository root or a `/docs` folder. Either rename `www` to `docs` and choose "main / docs" under Settings > Pages, or add a GitHub Action that publishes the `www` folder.
+- **GitHub Pages** (already set up for this repo): every push to `main` runs `.github/workflows/pages.yml`, which publishes the `www` folder to https://mumblescrzy.github.io/Eisenhower-Matrix-App/. If the very first run fails, open the repo's Settings > Pages and set Source to "GitHub Actions", then re-run the workflow from the Actions tab.
 
 HTTPS is required for the install prompt, offline mode and the Play Store route below. All of those hosts provide it for free.
 
@@ -119,3 +121,7 @@ After changing anything in `www/`, run `npx cap copy android` and rebuild.
 - Sync between devices (needs a small backend or a file-sync service).
 - Reminders or notifications for due dates (straightforward in the Capacitor route).
 - Recurring tasks, tags, or a weekly review showing how many tasks landed in each quadrant.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
