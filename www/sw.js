@@ -1,6 +1,6 @@
 /* Service worker: caches the app shell so it loads offline and installs as a PWA.
    Bump VERSION whenever you change any file in www/ so users pick up the update. */
-const VERSION = '2026-11-07.2';
+const VERSION = '2026-11-07.3';
 const CACHE = 'eisenhower-' + VERSION;
 const SHELL = [
   './',

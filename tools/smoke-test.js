@@ -111,6 +111,7 @@ async function main() {
   // 1. Empty state and the two default tabs
   check('starts empty with hint visible', await evaluate(`document.querySelectorAll('.dot').length === 0 && !document.getElementById('emptyHint').hidden`));
   check('two tabs, Work active', (await evaluate(`document.querySelectorAll('.tab').length`)) === 2 && (await activeTab()) === 'Work');
+  check('save-file bar hidden until a file is linked', await evaluate(`document.getElementById('fileBar').hidden === true`));
 
   // 2. Tasks saved before matrices existed show up on Work
   await evaluate(`localStorage.setItem('eisenhower.tasks.v1', JSON.stringify([{ id: 'legacy1', title: 'Old task from v1', urgency: 60, importance: 70, done: false, createdAt: '2026-01-01T00:00:00.000Z' }]))`);
@@ -253,13 +254,40 @@ async function main() {
   await evaluate(`document.getElementById('themeToggle').click()`);
   await shot('3-desktop-dark.png');
 
-  // 13. Export payload
-  const exported = await evaluate(`(() => { let captured = null; const orig = URL.createObjectURL; URL.createObjectURL = (b) => { captured = b; return 'blob:x'; };
-    document.getElementById('exportBtn').click(); URL.createObjectURL = orig; return captured ? captured.text() : null; })()`);
-  const parsed = exported ? JSON.parse(exported) : null;
-  check('export produces a JSON file with all tasks and both matrices', !!parsed && parsed.app === 'eisenhower-matrix' && parsed.tasks.length === 9 && parsed.boards.length === 2 && parsed.boards[1].name === 'Family');
+  // 13. Save file via the download fallback (the native picker needs a real user gesture, so hide the API)
+  await evaluate(`window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined;`);
+  const captureDownload = (action) => evaluate(`(() => { let captured = null; const orig = URL.createObjectURL; URL.createObjectURL = (b) => { captured = b; return 'blob:x'; };
+    ${action}; URL.createObjectURL = orig; return captured ? captured.text() : null; })()`);
+  const saved = await captureDownload(`document.getElementById('saveBtn').click()`);
+  const parsed = saved ? JSON.parse(saved) : null;
+  check('Save writes a save file with all tasks and both matrices', !!parsed && parsed.app === 'eisenhower-matrix' && typeof parsed.savedAt === 'string' &&
+    parsed.tasks.length === 9 && parsed.boards.length === 2 && parsed.boards[1].name === 'Family');
+  const viaKey = await captureDownload(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }))`);
+  check('Ctrl+S saves too', !!viaKey && JSON.parse(viaKey).tasks.length === 9);
 
-  // 14. Mobile layout
+  // 14. Load from file replaces everything, with Undo
+  const loadPayload = JSON.stringify({
+    app: 'eisenhower-matrix', version: 2, savedAt: '2026-11-07T12:00:00.000Z',
+    boards: [{ id: 'work', name: 'Office' }, { id: 'home', name: 'House' }],
+    tasks: [
+      { id: 'f1', boardId: 'work', title: 'From file one', urgency: 90, importance: 90 },
+      { id: 'f2', boardId: 'home', title: 'From file two', urgency: 10, importance: 10 },
+      { id: 'f3', boardId: 'home', title: 'From file three', urgency: 60, importance: 20 },
+    ],
+  });
+  await evaluate(`(() => { const input = document.getElementById('loadFile'); const dt = new DataTransfer();
+    dt.items.add(new File([${JSON.stringify(loadPayload)}], 'backup.json', { type: 'application/json' }));
+    input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+  await sleep(250);
+  check('Load replaces the tasks and applies the file\'s tab names', (await stored('tasks.length')) === 3 && (await dots()) === 1 && (await activeTab()) === 'Office' &&
+    (await evaluate(`document.querySelector('.tab[data-id="home"] .tab-name').textContent`)) === 'House');
+  check('Load shows an Undo toast', await evaluate(`document.getElementById('toast').classList.contains('show') && document.getElementById('toast').textContent.includes('Loaded 3 tasks')`));
+  await evaluate(`document.querySelector('#toast button').click()`);
+  await sleep(100);
+  check('Undo restores the previous tasks and tab names', (await stored('tasks.length')) === 9 && (await activeTab()) === 'Work' &&
+    (await evaluate(`document.querySelector('.tab[data-id="home"] .tab-name').textContent`)) === 'Family');
+
+  // 15. Mobile layout
   await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 2, mobile: true });
   await sleep(150);
   check('no horizontal overflow on a phone-width screen', await evaluate(`document.documentElement.scrollWidth <= 412`), 'scrollWidth ' + (await evaluate(`document.documentElement.scrollWidth`)));
@@ -269,6 +297,14 @@ async function main() {
   await sleep(150);
   await shot('5-mobile-dialog.png');
   await evaluate(`document.getElementById('dlgCancel').click()`);
+  // The native file picker cannot be driven headlessly, so show the save-file bar by hand to check its phone layout.
+  await evaluate(`(() => { const b = document.getElementById('fileBar'); b.hidden = false; b.classList.add('attention');
+    document.getElementById('fileName').textContent = 'eisenhower-matrix.json';
+    document.getElementById('fileStatus').textContent = 'Click "Allow saving" to keep this file up to date';
+    document.getElementById('fileAllowBtn').hidden = false; })()`);
+  await sleep(100);
+  check('save-file bar fits a phone-width screen', await evaluate(`document.documentElement.scrollWidth <= 412`), 'scrollWidth ' + (await evaluate(`document.documentElement.scrollWidth`)));
+  await shot('6-mobile-filebar.png');
 
   check('no console errors or uncaught exceptions', errors.length === 0, errors.join(' | '));
 

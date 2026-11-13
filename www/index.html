@@ -40,9 +40,10 @@
         </summary>
         <div class="menu-panel" role="menu">
           <button type="button" role="menuitem" id="installBtn" hidden>Install app</button>
-          <button type="button" role="menuitem" id="exportBtn">Export tasks (JSON)</button>
-          <button type="button" role="menuitem" id="importBtn">Import tasks (JSON)</button>
-          <input type="file" id="importFile" accept="application/json,.json" hidden>
+          <button type="button" role="menuitem" id="saveBtn">Save (Ctrl+S)</button>
+          <button type="button" role="menuitem" id="saveAsBtn">Save as&hellip;</button>
+          <button type="button" role="menuitem" id="loadBtn">Load from file&hellip;</button>
+          <input type="file" id="loadFile" accept="application/json,.json" hidden>
           <hr>
           <button type="button" role="menuitem" id="samplesBtn">Load sample tasks</button>
           <button type="button" role="menuitem" id="clearDoneBtn">Clear completed tasks</button>
@@ -52,6 +53,21 @@
       </details>
     </div>
   </header>
+
+  <div class="filebar-wrap">
+    <div class="filebar" id="fileBar" hidden>
+      <svg class="filebar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+      <span class="filebar-name" id="fileName"></span>
+      <span class="filebar-status" id="fileStatus" aria-live="polite"></span>
+      <span class="filebar-spacer"></span>
+      <label class="toggle"><input type="checkbox" id="autoSaveToggle" checked><span>Auto-save</span></label>
+      <button type="button" class="ghost small" id="fileAllowBtn" hidden>Allow saving</button>
+      <button type="button" class="ghost small" id="fileSaveBtn">Save now</button>
+      <button type="button" class="icon-btn small" id="fileUnlinkBtn" aria-label="Stop using this save file" title="Stop using this save file">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </div>
 
   <main>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Matrices"></nav>
@@ -211,7 +227,7 @@
         <li><span class="swatch q-delegate"></span><span><strong>Delegate</strong>: urgent, not important. Hand it off if you can.</span></li>
         <li><span class="swatch q-eliminate"></span><span><strong>Eliminate</strong>: neither. Drop it, or park it.</span></li>
       </ul>
-      <p>This app plots each task as a dot so you can see at a glance where your attention is going. There are two separate matrices, Work and Home, so different parts of life stay apart; click the active tab to rename it. Everything is stored on this device only.</p>
+      <p>This app plots each task as a dot so you can see at a glance where your attention is going. There are two separate matrices, Work and Home, so different parts of life stay apart; click the active tab to rename it. Everything is stored in this browser, and you can also keep a save file on disk from the menu.</p>
       <div class="dlg-actions">
         <span class="spacer"></span>
         <button type="button" class="primary" id="aboutClose">Got it</button>

@@ -1,6 +1,8 @@
 /* ==========================================================================
    Eisenhower Matrix - app logic
-   Plain JavaScript, no build step. Data lives in localStorage on this device.
+   Plain JavaScript, no build step. Data lives in localStorage on this device,
+   and can also be kept in a save file on disk (File System Access API where
+   available, download / file picker elsewhere).
    Tasks belong to one of several boards (matrices): "Work" and "Home" by default.
    ========================================================================== */
 (function () {
@@ -12,8 +14,11 @@
   const PREFS_KEY = 'eisenhower.prefs.v1';
   const MID = 50; // scores at or above this count as urgent / important
   const BOARD_NAME_MAX = 24;
+  const SAVE_FILE_NAME = 'eisenhower-matrix.json';
+  const SAVE_FILE_TYPES = [{ description: 'Eisenhower Matrix save file', accept: { 'application/json': ['.json'] } }];
+  const AUTOSAVE_DELAY = 800;
 
-  // The two default matrices. Names are editable; ids are stable so exports round-trip between devices.
+  // The two default matrices. Names are editable; ids are stable so save files round-trip between devices.
   const DEFAULT_BOARDS = [
     { id: 'work', name: 'Work' },
     { id: 'home', name: 'Home' },
@@ -52,6 +57,12 @@
     if (iso === today) return { label: 'Due today', state: 'today' };
     return { label: 'Due ' + label, state: 'upcoming' };
   }
+  function formatWhen(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return toISODate(d) === todayISO() ? time : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  }
 
   function quadrantOf(t) {
     const urgent = t.urgency >= MID;
@@ -85,6 +96,31 @@
     catch (err) { console.warn('Could not save to localStorage', err); }
   }
 
+  // Minimal IndexedDB key-value store, used only to remember the save file handle between visits.
+  const idb = {
+    open() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('eisenhower', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('kv');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    },
+    async run(mode, fn) {
+      const db = await this.open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => db.close();
+      });
+    },
+    get(key) { return this.run('readonly', (s) => s.get(key)); },
+    set(key, value) { return this.run('readwrite', (s) => s.put(value, key)); },
+    del(key) { return this.run('readwrite', (s) => s.delete(key)); },
+  };
+
   // ---------- Boards ----------
   function sanitizeBoard(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -106,10 +142,10 @@
   function boardById(id) { return boards.find((b) => b.id === id); }
   function boardName(id) { const b = boardById(id); return b ? b.name : ''; }
   function activeBoard() { return boardById(activeBoardId) || boards[0]; }
-  function saveBoards() { saveJSON(BOARDS_KEY, boards); }
+  function saveBoards() { saveJSON(BOARDS_KEY, boards); markChanged(); }
 
   // ---------- Tasks ----------
-  // Normalizes anything that claims to be a task (from storage or an import) into a safe shape.
+  // Normalizes anything that claims to be a task (from storage or a save file) into a safe shape.
   // Tasks without a known board (including those saved before boards existed) go to fallbackBoardId.
   function sanitizeTask(raw, fallbackBoardId) {
     if (!raw || typeof raw !== 'object') return null;
@@ -157,11 +193,22 @@
   // ---------- State ----------
   let boards = loadBoards();
   let tasks = loadTasks();
-  let prefs = Object.assign({ labels: true, theme: 'auto', board: boards[0].id }, loadJSON(PREFS_KEY, {}));
+  let prefs = Object.assign(
+    { labels: true, theme: 'auto', board: boards[0].id, autoSave: true, file: null, changedAt: '' },
+    loadJSON(PREFS_KEY, {})
+  );
   let activeBoardId = boardById(prefs.board) ? prefs.board : boards[0].id;
   let editingId = null;   // task being edited in the dialog; null means "new task"
   let selectedId = null;  // highlighted task (last added or tapped)
   let deferredInstall = null;
+
+  // Save file state (only meaningful where the File System Access API exists)
+  let fileHandle = null;        // FileSystemFileHandle of the linked save file
+  let filePermission = false;   // true when we may write to it right now
+  let fileError = '';           // last file problem, shown in the file bar
+  let autoSavePaused = false;   // set after undoing a load, so we never silently overwrite a newer file
+  let suppressAutoSave = false; // true while applying data that came from the file itself
+  let autoSaveTimer = null;
 
   function loadTasks() {
     const arr = loadJSON(STORAGE_KEY, []);
@@ -171,8 +218,16 @@
     if (arr.some((raw) => !raw || typeof raw.boardId !== 'string')) saveJSON(STORAGE_KEY, list);
     return list;
   }
-  function persist() { saveJSON(STORAGE_KEY, tasks); }
   function savePrefs() { saveJSON(PREFS_KEY, prefs); }
+  function markChanged() {
+    prefs.changedAt = new Date().toISOString();
+    savePrefs();
+    scheduleAutoSave();
+  }
+  function persist() {
+    saveJSON(STORAGE_KEY, tasks);
+    markChanged();
+  }
   function findTask(id) { return tasks.find((t) => t.id === id); }
   function visibleTasks() { return tasks.filter((t) => t.boardId === activeBoardId); }
 
@@ -221,15 +276,23 @@
     themeToggle: $('#themeToggle'),
     menu: $('#menu'),
     installBtn: $('#installBtn'),
-    exportBtn: $('#exportBtn'),
-    importBtn: $('#importBtn'),
-    importFile: $('#importFile'),
+    saveBtn: $('#saveBtn'),
+    saveAsBtn: $('#saveAsBtn'),
+    loadBtn: $('#loadBtn'),
+    loadFile: $('#loadFile'),
     samplesBtn: $('#samplesBtn'),
     clearDoneBtn: $('#clearDoneBtn'),
     aboutBtn: $('#aboutBtn'),
     aboutDialog: $('#aboutDialog'),
     aboutClose: $('#aboutClose'),
     toast: $('#toast'),
+    fileBar: $('#fileBar'),
+    fileName: $('#fileName'),
+    fileStatus: $('#fileStatus'),
+    autoSaveToggle: $('#autoSaveToggle'),
+    fileAllowBtn: $('#fileAllowBtn'),
+    fileSaveBtn: $('#fileSaveBtn'),
+    fileUnlinkBtn: $('#fileUnlinkBtn'),
   };
 
   // ---------- Rendering ----------
@@ -237,6 +300,7 @@
     renderTabs();
     renderDots();
     renderLists();
+    renderFileBar();
     document.title = activeBoard().name + ' · Eisenhower Matrix';
   }
 
@@ -710,6 +774,242 @@
   applyTheme();
   if (prefs.theme === 'light' || prefs.theme === 'dark') syncThemeColor();
 
+  // ---------- Save file: payload, parsing, applying ----------
+  function fsSupported() {
+    return typeof window.showSaveFilePicker === 'function' && typeof window.showOpenFilePicker === 'function';
+  }
+  function savePayload() {
+    return { app: 'eisenhower-matrix', version: 2, savedAt: new Date().toISOString(), boards, tasks };
+  }
+  // Accepts a save file (or an older export, or a bare task array) and returns { savedAt, boards, tasks } or throws.
+  function parseSaveFile(text) {
+    const data = JSON.parse(text);
+    const list = Array.isArray(data) ? data : (data && Array.isArray(data.tasks) ? data.tasks : null);
+    if (!list) throw new Error('No task list in file');
+    return {
+      savedAt: (data && typeof data.savedAt === 'string' && data.savedAt) || (data && typeof data.exportedAt === 'string' && data.exportedAt) || '',
+      boards: data && Array.isArray(data.boards) ? data.boards.map(sanitizeBoard).filter(Boolean) : [],
+      tasks: list,
+    };
+  }
+  // Replaces the current boards' names and all tasks with the file's contents. Undo restores what was there.
+  function applyLoadedData(data, sourceName, reason) {
+    const snapshot = { boards: boards.map((b) => Object.assign({}, b)), tasks: tasks.map((t) => Object.assign({}, t)) };
+    for (const ib of data.boards) {
+      const local = boardById(ib.id);
+      if (local) local.name = ib.name; else boards.push(ib);
+    }
+    saveJSON(BOARDS_KEY, boards);
+    tasks = data.tasks.map((raw) => sanitizeTask(raw, boards[0].id)).filter(Boolean);
+    if (!boardById(activeBoardId)) activeBoardId = boards[0].id;
+    selectedId = null;
+    suppressAutoSave = true;
+    persist();
+    suppressAutoSave = false;
+    render();
+    const count = tasks.length;
+    const message = (reason === 'newer' ? 'Save file had newer data. Loaded ' : 'Loaded ') + count + (count === 1 ? ' task' : ' tasks') + ' from ' + sourceName;
+    showToast(message, {
+      label: 'Undo',
+      run: () => {
+        boards = snapshot.boards;
+        tasks = snapshot.tasks;
+        if (!boardById(activeBoardId)) activeBoardId = boards[0].id;
+        saveJSON(BOARDS_KEY, boards);
+        autoSavePaused = Boolean(fileHandle); // local data now differs from the file; do not overwrite it silently
+        persist();
+        render();
+      },
+    });
+    return count;
+  }
+
+  // ---------- Save file: disk access (File System Access API) ----------
+  async function ensurePermission(handle, request) {
+    const opts = { mode: 'readwrite' };
+    if ((await handle.queryPermission(opts)) === 'granted') return true;
+    if (!request) return false;
+    return (await handle.requestPermission(opts)) === 'granted';
+  }
+  async function linkFile(handle) {
+    fileHandle = handle;
+    fileError = '';
+    autoSavePaused = false;
+    prefs.file = { name: handle.name, savedAt: '', syncedAt: '' };
+    savePrefs();
+    try { await idb.set('fileHandle', handle); } catch (err) { console.warn('Could not remember the save file', err); }
+  }
+  async function writeFile(handle) {
+    const data = savePayload();
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(data, null, 2));
+    await writable.close();
+    prefs.file = { name: handle.name, savedAt: data.savedAt, syncedAt: data.savedAt };
+    savePrefs();
+  }
+  function downloadSaveFile() {
+    const blob = new Blob([JSON.stringify(savePayload(), null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: SAVE_FILE_NAME });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Saved ' + tasks.length + (tasks.length === 1 ? ' task' : ' tasks') + ' to ' + SAVE_FILE_NAME + ' in your downloads');
+  }
+
+  async function saveToFile(opts = {}) {
+    if (!fsSupported()) { downloadSaveFile(); return; }
+    try {
+      let handle = fileHandle;
+      if (!handle || opts.pickNew) {
+        handle = await window.showSaveFilePicker({ suggestedName: SAVE_FILE_NAME, types: SAVE_FILE_TYPES });
+        await linkFile(handle);
+      }
+      if (!(await ensurePermission(handle, true))) {
+        filePermission = false;
+        renderFileBar();
+        if (!opts.silent) showToast('Permission to write the file was not granted');
+        return;
+      }
+      filePermission = true;
+      await writeFile(handle);
+      autoSavePaused = false;
+      fileError = '';
+      renderFileBar();
+      if (!opts.silent) showToast('Saved to ' + handle.name);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // user closed the picker
+      fileError = 'Could not save: ' + ((err && err.message) || err);
+      renderFileBar();
+      if (!opts.silent) showToast(fileError);
+    }
+  }
+
+  async function loadFromFile() {
+    if (!fsSupported()) { dom.loadFile.click(); return; }
+    try {
+      const [handle] = await window.showOpenFilePicker({ multiple: false, types: SAVE_FILE_TYPES });
+      const file = await handle.getFile();
+      const data = parseSaveFile(await file.text());
+      await linkFile(handle);
+      filePermission = await ensurePermission(handle, false); // the picker grants reading; writing is asked for on first save
+      applyLoadedData(data, handle.name);
+      prefs.file = { name: handle.name, savedAt: data.savedAt || new Date(file.lastModified).toISOString(), syncedAt: prefs.changedAt };
+      savePrefs();
+      renderFileBar();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      showToast('Could not load: ' + ((err && err.message) || err));
+    }
+  }
+
+  // Fallback loader (file input) for browsers without the File System Access API, and for drag-free imports.
+  dom.loadFile.addEventListener('change', async () => {
+    const file = dom.loadFile.files && dom.loadFile.files[0];
+    dom.loadFile.value = '';
+    if (!file) return;
+    try {
+      applyLoadedData(parseSaveFile(await file.text()), file.name);
+    } catch (err) {
+      showToast('Could not load that file. Expected a save file from this app.');
+    }
+  });
+
+  // After reopening the app (or clicking "Allow saving"), bring the file and this device in line:
+  // a file changed elsewhere since we last touched it wins (with Undo); otherwise local changes are written out.
+  async function syncWithFile() {
+    const file = await fileHandle.getFile();
+    let data = null;
+    try { data = parseSaveFile(await file.text()); } catch (err) { data = null; }
+    const fileSavedAt = (data && data.savedAt) || new Date(file.lastModified).toISOString();
+    const syncedAt = (prefs.file && prefs.file.syncedAt) || '';
+    if (data && (!syncedAt || fileSavedAt > syncedAt)) {
+      applyLoadedData(data, fileHandle.name, 'newer');
+      prefs.file = { name: fileHandle.name, savedAt: fileSavedAt, syncedAt: prefs.changedAt };
+      savePrefs();
+    } else if (prefs.changedAt > syncedAt) {
+      await writeFile(fileHandle);
+    }
+    renderFileBar();
+  }
+
+  async function allowSaving() {
+    if (!fileHandle) return;
+    try {
+      filePermission = await ensurePermission(fileHandle, true);
+      fileError = filePermission ? '' : 'Permission was not granted';
+      renderFileBar();
+      if (filePermission) await syncWithFile();
+    } catch (err) {
+      fileError = 'Could not access the file: ' + ((err && err.message) || err);
+      renderFileBar();
+    }
+  }
+
+  async function unlinkFile() {
+    fileHandle = null;
+    filePermission = false;
+    autoSavePaused = false;
+    fileError = '';
+    prefs.file = null;
+    savePrefs();
+    try { await idb.del('fileHandle'); } catch (err) { /* nothing to forget */ }
+    renderFileBar();
+    showToast('Stopped using the save file. Your tasks stay in this browser.');
+  }
+
+  function scheduleAutoSave() {
+    if (dom.fileBar) renderFileBar();
+    if (suppressAutoSave || !fileHandle || !filePermission || prefs.autoSave === false || autoSavePaused) return;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => saveToFile({ silent: true }), AUTOSAVE_DELAY);
+  }
+
+  function renderFileBar() {
+    const show = Boolean(fileHandle) && fsSupported();
+    dom.fileBar.hidden = !show;
+    if (!show) return;
+    dom.fileName.textContent = fileHandle.name;
+    dom.autoSaveToggle.checked = prefs.autoSave !== false;
+    dom.fileAllowBtn.hidden = filePermission;
+    const unsaved = prefs.file && prefs.changedAt > (prefs.file.syncedAt || '');
+    let status;
+    if (fileError) status = fileError;
+    else if (!filePermission) status = 'Click "Allow saving" to keep this file up to date';
+    else if (autoSavePaused) status = 'Auto-save paused: this device differs from the file. "Save now" overwrites the file.';
+    else if (unsaved) status = prefs.autoSave === false ? 'Unsaved changes' : 'Saving…';
+    else if (prefs.file && prefs.file.savedAt) status = 'Saved ' + formatWhen(prefs.file.savedAt);
+    else status = '';
+    dom.fileStatus.textContent = status;
+    dom.fileBar.classList.toggle('attention', !filePermission || Boolean(fileError) || autoSavePaused);
+  }
+
+  async function initSaveFile() {
+    dom.saveBtn.textContent = fsSupported() ? 'Save (Ctrl+S)' : 'Save to file (download)';
+    dom.saveAsBtn.hidden = !fsSupported();
+    if (!fsSupported()) return;
+    try { fileHandle = (await idb.get('fileHandle')) || null; } catch (err) { fileHandle = null; }
+    if (!fileHandle) { prefs.file = null; savePrefs(); renderFileBar(); return; }
+    try {
+      filePermission = await ensurePermission(fileHandle, false);
+      renderFileBar();
+      if (filePermission) await syncWithFile(); // permission still granted from before: catch up silently
+    } catch (err) {
+      fileError = 'Could not access the file: ' + ((err && err.message) || err);
+      renderFileBar();
+    }
+  }
+
+  dom.fileAllowBtn.addEventListener('click', allowSaving);
+  dom.fileSaveBtn.addEventListener('click', () => saveToFile());
+  dom.fileUnlinkBtn.addEventListener('click', unlinkFile);
+  dom.autoSaveToggle.addEventListener('change', () => {
+    prefs.autoSave = dom.autoSaveToggle.checked;
+    savePrefs();
+    if (prefs.autoSave) { autoSavePaused = false; scheduleAutoSave(); } else renderFileBar();
+  });
+
   // ---------- Menu ----------
   function closeMenu() { dom.menu.open = false; }
   document.addEventListener('click', (e) => {
@@ -719,42 +1019,9 @@
     if (e.key === 'Escape' && dom.menu.open) closeMenu();
   });
 
-  dom.exportBtn.addEventListener('click', () => {
-    closeMenu();
-    const payload = { app: 'eisenhower-matrix', version: 2, exportedAt: new Date().toISOString(), boards, tasks };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: 'eisenhower-tasks-' + todayISO() + '.json' });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('Exported ' + tasks.length + (tasks.length === 1 ? ' task' : ' tasks') + ' from all matrices');
-  });
-
-  dom.importBtn.addEventListener('click', () => { closeMenu(); dom.importFile.click(); });
-  dom.importFile.addEventListener('change', async () => {
-    const file = dom.importFile.files && dom.importFile.files[0];
-    dom.importFile.value = '';
-    if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      const list = Array.isArray(data) ? data : (data && Array.isArray(data.tasks) ? data.tasks : null);
-      if (!list) throw new Error('No task list in file');
-      // Tasks keep their matrix when it exists here; anything else lands on the matrix you are looking at.
-      const incoming = list.map((raw) => sanitizeTask(raw, activeBoardId)).filter(Boolean);
-      let added = 0, updated = 0;
-      for (const t of incoming) {
-        const idx = tasks.findIndex((x) => x.id === t.id);
-        if (idx >= 0) { tasks[idx] = t; updated++; } else { tasks.push(t); added++; }
-      }
-      persist();
-      render();
-      showToast('Imported ' + added + ' new, ' + updated + ' updated');
-    } catch (err) {
-      showToast('Could not import that file. Expected a JSON export from this app.');
-    }
-  });
+  dom.saveBtn.addEventListener('click', () => { closeMenu(); saveToFile(); });
+  dom.saveAsBtn.addEventListener('click', () => { closeMenu(); saveToFile({ pickNew: true }); });
+  dom.loadBtn.addEventListener('click', () => { closeMenu(); loadFromFile(); });
 
   dom.samplesBtn.addEventListener('click', () => {
     closeMenu();
@@ -797,9 +1064,12 @@
   }
   function hideToast() { dom.toast.classList.remove('show'); }
 
-  // ---------- Keyboard shortcut: "/" focuses the add box ----------
+  // ---------- Keyboard shortcuts: "/" focuses the add box, Ctrl+S saves, Ctrl+O loads ----------
   document.addEventListener('keydown', (e) => {
-    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && !e.shiftKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); saveToFile(); return; }
+    if (mod && !e.altKey && !e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); loadFromFile(); return; }
+    if (e.key !== '/' || mod || e.altKey) return;
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || dom.dialog.open || dom.aboutDialog.open) return;
     e.preventDefault();
@@ -836,4 +1106,5 @@
 
   // ---------- Go ----------
   render();
+  initSaveFile();
 })();

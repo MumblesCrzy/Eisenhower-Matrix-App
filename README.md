@@ -37,9 +37,9 @@ In the app:
 - **Drag a dot** to re-prioritize. Tap or click it to edit, complete or delete. With a keyboard, Tab to a dot and use the arrow keys (hold Shift for bigger steps).
 - **Lists** beside or below the matrix group tasks by quadrant, sorted by combined score. Tick the box to complete a task; completed tasks collapse into a "Completed" section. Most actions show an Undo toast.
 - **Overdue** tasks get a pulsing ring on the matrix and a red chip in the list.
-- **Menu (three dots)**: export / import JSON, load sample tasks, clear completed, install the app, about the method.
+- **Menu (three dots)**: save / load a save file, load sample tasks, clear completed, install the app, about the method.
 - **Theme** follows your system setting; the sun / moon button overrides it.
-- Press `/` anywhere to jump to the add box.
+- Press `/` anywhere to jump to the add box, `Ctrl+S` to save, `Ctrl+O` to load.
 
 ### Work and Home
 
@@ -48,10 +48,21 @@ Tasks live on one of two matrices, shown as tabs above the add box: **Work** and
 - Click a tab to switch. The tab you were on is remembered next time.
 - Click the active tab again (or press Enter on it) to rename it, for example "Family" or "Side project". Enter saves, Escape cancels.
 - New tasks go to the matrix you are looking at. To move a task, open it and change the **Matrix** field.
-- Load sample tasks and Clear completed act on the current matrix only. Export saves both matrices; Import puts tasks back on their original matrix and anything unlabelled on the current one. Import never changes your tab names.
+- Load sample tasks and Clear completed act on the current matrix only. The save file holds both matrices and their names.
 - Tasks created before this feature existed appear on Work.
 
-Data is stored in the browser's localStorage on the device you are using. Nothing is sent anywhere. Use Export to back up or move tasks to another device.
+### Save file
+
+Your tasks are always kept in the browser's storage on the device you are using, and nothing is sent anywhere. On top of that you can keep a **save file** on disk, which doubles as a backup and as a way to carry tasks between devices.
+
+- **Save (Ctrl+S)**: the first time, a file dialog asks where to put `eisenhower-matrix.json`. After that, Save writes to the same file.
+- **Save as...** picks a different file. **Load from file... (Ctrl+O)** opens a save file and replaces what is on screen, with an Undo in the toast; the loaded file becomes the linked file.
+- While a file is linked, a bar under the header shows its name, when it was last saved, and an **Auto-save** switch (on by default) that writes every change to the file about a second after you make it.
+- When you reopen the app, the browser needs you to confirm access again: click **Allow saving** in the bar. The app then compares the file with this device. If the file was changed since this device last touched it (for example by the same app on another computer), the file is loaded, with Undo. Otherwise any local changes are written out. After an Undo, auto-save pauses so a newer file is never overwritten silently; **Save now** overwrites it on purpose.
+- The **x** in the bar unlinks the file. Your tasks stay in the browser.
+- Keeping the save file in a synced folder such as OneDrive, Dropbox or Google Drive gives you a simple way to share tasks between computers.
+
+Linking a file needs the File System Access API, which Chrome, Edge and other Chromium browsers have on desktop. In Firefox, Safari and on Android, Save downloads `eisenhower-matrix.json` and Load opens a file picker instead; there is no linked file or auto-save there, so save again whenever you want a fresh copy.
 
 ## Project layout
 
@@ -74,7 +85,7 @@ Things you will most likely want to tweak:
 
 There is no build step: edit the files in `www/` and refresh the browser.
 
-`node tools/smoke-test.js` drives the app in a headless Edge or Chrome through the DevTools Protocol, runs a set of checks (add flow, drag, keyboard, complete / undo, persistence, matrix tabs and renaming, export, phone layout) and saves screenshots to `tools/screenshots/`. Set `BROWSER=<path to msedge.exe or chrome.exe>` if it cannot find a browser on its own.
+`node tools/smoke-test.js` drives the app in a headless Edge or Chrome through the DevTools Protocol, runs a set of checks (add flow, drag, keyboard, complete / undo, persistence, matrix tabs and renaming, save and load, phone layout) and saves screenshots to `tools/screenshots/`. Set `BROWSER=<path to msedge.exe or chrome.exe>` if it cannot find a browser on its own.
 
 ## Put it on the web
 

@@ -162,6 +162,29 @@ h1, h2, p { margin: 0; }
 .menu-panel button:hover { background: var(--surface-2); }
 .menu-panel hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 
+/* ---------- Save file bar (only shown while a file on disk is linked) ---------- */
+.filebar-wrap { max-width: 1180px; margin: 0 auto; padding: 12px 16px 0; }
+@media (min-width: 900px) { .filebar-wrap { padding: 16px 24px 0; } }
+.filebar-wrap:has(.filebar[hidden]) { display: none; }
+.filebar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 13px; color: var(--muted);
+}
+.filebar[hidden] { display: none; }
+.filebar.attention {
+  border-color: color-mix(in srgb, var(--q-delegate) 55%, transparent);
+  background: color-mix(in srgb, var(--q-delegate) 8%, var(--surface));
+}
+.filebar-icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.filebar-name { font-weight: 600; color: var(--text); }
+.filebar-status { min-width: 0; }
+.filebar-spacer { flex: 1; }
+.ghost.small { height: 32px; padding: 0 12px; font-size: 13px; }
+.icon-btn.small { width: 32px; height: 32px; }
+.icon-btn.small svg { width: 16px; height: 16px; }
+
 /* ---------- Page layout ---------- */
 main {
   max-width: 1180px; margin: 0 auto;
